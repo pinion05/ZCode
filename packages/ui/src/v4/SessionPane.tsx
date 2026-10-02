@@ -276,6 +276,7 @@ import {
   shouldOfferSideSlashCommand,
   type AppSlashCommand,
 } from "@/slashCommandHelpers.js";
+import type { V4ComposerUiAction, V4ComposerUiRequest } from "@/v4/composer/composerUiRequests.js";
 import {
   clearConversationSelectionReferenceScope,
   dispatchConversationSelectionAdd,
@@ -2065,35 +2066,88 @@ export function SessionPane({
     [cliSlashCommandNames],
   );
 
-  // `/side` App 层斜杠命令。命令目录仍以 CLI catalog 为权威，这里只在渲染层
-  // 按门禁注入"选中即打开辅助对话"的本地命令；草稿态（无父 session 可挂 child）、
-  // 辅助对话自身、只读与手机 viewport 均不提供。
+  // /model 与 /reasoning 本地命令的 UI 动作请求：requestId 递增保证同一动作可以
+  // 连续触发（复用 externalTextInsertRequest 的请求模式）。SessionPane 只是请求方，
+  // 实际动作由工具条内与 Ctrl+M / 点击触发器相同的接口执行；后续新动作
+  // （插件菜单等 composer 内部 UI）复用同一 dispatch，不再新增请求 prop。
+  const [composerUiRequest, setComposerUiRequest] = useState<V4ComposerUiRequest | null>(null);
+  const dispatchComposerUiAction = useCallback((action: V4ComposerUiAction) => {
+    setComposerUiRequest((current) => ({
+      requestId: (current?.requestId ?? 0) + 1,
+      action,
+    }));
+  }, []);
+
+  // App 层本地斜杠命令：选中即执行 UI 行为、不参与发送。命令目录仍以 CLI catalog
+  // 为权威，同名 CLI 命令优先（末尾统一 filter）。
+  // - /model /reasoning：打开 composer 工具条的模型/思考档位下拉；草稿态同样提供
+  //   （首发前选模型正是主要场景），未选模型时也提供（打开下拉即恢复路径）；只读不提供。
+  // - /side /btw：打开辅助对话；草稿态（无父 session 可挂 child）、辅助对话自身、
+  //   只读与手机 viewport 均不提供。
   const appSlashCommands = useMemo<AppSlashCommand[] | undefined>(() => {
+    const commands: AppSlashCommand[] = [];
+    if (!readOnly) {
+      commands.push(
+        {
+          value: "model",
+          description: intl.formatMessage({ id: "chat.slash.app.model.description" }),
+          keywords: ["model", "switch model", "model selection", "模型", "切换模型"],
+          run: () => dispatchComposerUiAction({ type: "openConfigPicker", picker: "model" }),
+        },
+        {
+          value: "reasoning",
+          description: intl.formatMessage({ id: "chat.slash.app.reasoning.description" }),
+          keywords: [
+            "reasoning",
+            "reasoning effort",
+            "effort",
+            "thought",
+            "thinking",
+            "思考",
+            "推理",
+            "档位",
+          ],
+          run: () => dispatchComposerUiAction({ type: "openConfigPicker", picker: "thought" }),
+        },
+      );
+    }
     if (
-      !sessionId ||
-      !onOpenSelectionSideChat ||
-      !shouldOfferSideSlashCommand({
+      sessionId &&
+      onOpenSelectionSideChat &&
+      shouldOfferSideSlashCommand({
         isDraft: sessionId === null,
         selectionSideChat,
         readOnly,
         isMobileViewport: false,
       })
     ) {
-      return undefined;
+      const openNewSelectionSideChat = () => {
+        void handleOpenSelectionSideConversation(undefined, true);
+      };
+      // 关键词固定同时包含中英文别名，任一 locale 下输入 side / btw / 辅助 都能搜到。
+      // `/btw` 是 `/side` 的等价别名，适配不同用户输入习惯，面板中各自独立展示。
+      const sharedKeywords = ["side", "btw", "side chat", "auxiliary", "辅助对话", "辅助", "侧边"];
+      const sideDescription = intl.formatMessage({ id: "chat.slash.app.side.description" });
+      commands.push(
+        {
+          value: "side",
+          description: sideDescription,
+          keywords: sharedKeywords,
+          run: openNewSelectionSideChat,
+        },
+        {
+          value: "btw",
+          description: sideDescription,
+          keywords: sharedKeywords,
+          run: openNewSelectionSideChat,
+        },
+      );
     }
-    const openNewSelectionSideChat = () => {
-      void handleOpenSelectionSideConversation(undefined, true);
-    };
-    // 关键词固定同时包含中英文别名，任一 locale 下输入 side / btw / 辅助 都能搜到。
-    // `/btw` 是 `/side` 的等价别名，适配不同用户输入习惯，面板中各自独立展示。
-    const sharedKeywords = ["side", "btw", "side chat", "auxiliary", "辅助对话", "辅助", "侧边"];
-    const description = intl.formatMessage({ id: "chat.slash.app.side.description" });
-    return [
-      { value: "side", description, keywords: sharedKeywords, run: openNewSelectionSideChat },
-      { value: "btw", description, keywords: sharedKeywords, run: openNewSelectionSideChat },
-    ].filter((command) => !cliSlashCommandNames.has(command.value));
+    const visibleCommands = commands.filter((command) => !cliSlashCommandNames.has(command.value));
+    return visibleCommands.length > 0 ? visibleCommands : undefined;
   }, [
     cliSlashCommandNames,
+    dispatchComposerUiAction,
     handleOpenSelectionSideConversation,
     intl,
     onOpenSelectionSideChat,
@@ -2556,6 +2610,17 @@ export function SessionPane({
         if (!slashCommand.task) return "sent" as const;
       }
 
+      // /model 与 /reasoning 是 App 层本地命令：直接打开 composer 工具条的对应下拉，
+      // 不进入发送链和模型就绪检查——未选模型时打开下拉正是恢复路径。
+      // CLI catalog 注册了同名自定义命令时让位给后端（与 / 面板过滤一致）。
+      if (
+        slashCommand?.kind === "openConfigPicker" &&
+        !cliSlashCommandNames.has(slashCommand.command)
+      ) {
+        dispatchComposerUiAction({ type: "openConfigPicker", picker: slashCommand.picker });
+        return "sent" as const;
+      }
+
       if (!(await ensureDraftModelReadyForSend())) {
         return "blocked" as const;
       }
@@ -2902,12 +2967,14 @@ export function SessionPane({
       availableSelectionSideSlashCommandNames,
       appSlashCommands,
       appFollowupMode,
+      cliSlashCommandNames,
       handleDraftSessionCreated,
       reportDraftCreated,
       handleDraftSwitchMode,
       handleOpenSelectionSideConversationWithPrompt,
       intl,
       lease,
+      dispatchComposerUiAction,
       resolveInitialDraftConfig,
       createSubmissionFromComposer,
       sessionId,
@@ -4431,6 +4498,7 @@ export function SessionPane({
       onOpenCodeViewer={onOpenCodeViewer}
       suppressGoalCommands={selectionSideChat}
       appSlashCommands={appSlashCommands}
+      composerUiRequest={composerUiRequest}
       onDropTargetControllerChange={handleDropTargetControllerChange}
     />
   );

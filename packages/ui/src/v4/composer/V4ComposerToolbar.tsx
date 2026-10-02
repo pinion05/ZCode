@@ -51,6 +51,7 @@ import {
 import { ThoughtLevelCycleControl } from "@/chat-input-toolbar/ThoughtLevelCycleControl.js";
 import { getNextThoughtLevelValue } from "@/chat-input-toolbar/thoughtLevelOptions.js";
 import type { V4ComposerConfigPicker } from "@/v4/composer/configPickerState.js";
+import type { V4ComposerUiRequest } from "@/v4/composer/composerUiRequests.js";
 import { useToolbarShortcutBindings } from "@/v4/composer/toolbarShortcuts.js";
 import {
   resolveModelSelectTriggerDisplay,
@@ -341,6 +342,8 @@ export interface V4ComposerToolbarProps {
   /** 单个 composer 内的配置 picker 排他 owner；只属于 renderer-local presentation。 */
   activeConfigPicker: V4ComposerConfigPicker | null;
   onConfigPickerOpenChange: (picker: V4ComposerConfigPicker, open: boolean) => void;
+  /** App 层 UI 动作请求（/model /reasoning 斜杠命令等）；requestId 递增触发一次执行。 */
+  composerUiRequest?: V4ComposerUiRequest | null;
   /**
    * 选中模型（providerId/modelId 来自目录 value 解码），由 Composer owner 更新并持久化。
    * sourceModel 只表达这次用户操作的来源，不从 Session 投影补 CAS 或思考档位。
@@ -376,6 +379,7 @@ function V4ComposerModelControlsImpl({
   disabled,
   activeConfigPicker,
   onConfigPickerOpenChange,
+  composerUiRequest,
   onSelectModel,
   onSelectThought,
   onSendCompressionCommand,
@@ -947,6 +951,38 @@ function V4ComposerModelControlsImpl({
       model: effectiveConfig.model,
     });
   }, [effectiveConfig, onSelectThought, thoughtOption]);
+
+  // App 层 UI 动作请求（/model /reasoning 等）：按 action 分发，复用既有 GUI 事件
+  // 的同一接口，不新增第二条打开路径。openConfigPicker/model 走 Ctrl+M 的
+  // openRequestKey（受控 DropdownMenu 不能依赖模拟 click）；openConfigPicker/thought
+  // 是受控 Select，直接置 open 并聚焦触发器，当前模型没有可选档位时 no-op。
+  // 新动作在 V4ComposerUiAction 追加成员后在此增加分支。
+  const lastComposerUiRequestIdRef = useRef(-1);
+  useEffect(() => {
+    if (!composerUiRequest || composerUiRequest.requestId <= 0) {
+      return;
+    }
+    if (composerUiRequest.requestId === lastComposerUiRequestIdRef.current) {
+      return;
+    }
+    lastComposerUiRequestIdRef.current = composerUiRequest.requestId;
+    const { action } = composerUiRequest;
+    if (action.type !== "openConfigPicker") {
+      return;
+    }
+    if (action.picker === "model") {
+      handleOpenModelMenuShortcut();
+    } else if (action.picker === "thought") {
+      if (!thoughtOption) return;
+      handleThoughtPickerOpenChange(true);
+      thoughtTriggerRef.current?.focus();
+    }
+  }, [
+    composerUiRequest,
+    handleOpenModelMenuShortcut,
+    handleThoughtPickerOpenChange,
+    thoughtOption,
+  ]);
 
   const taskUsage = useMemo(() => {
     const contextWindow = usage?.contextWindow;

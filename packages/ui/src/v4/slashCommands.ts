@@ -4,6 +4,14 @@ export type V4VisibleSlashCommand =
       displayText: string;
     }
   | {
+      kind: "openConfigPicker";
+      /** 触发的原始命令名（model/reasoning），供 CLI 同名自定义命令让位检查。 */
+      command: "model" | "reasoning";
+      /** 打开的 composer 配置下拉：/model → 模型菜单，/reasoning → 思考档位菜单。 */
+      picker: "model" | "thought";
+      displayText: string;
+    }
+  | {
       kind: "planShortcut";
       task: string;
       displayText: string;
@@ -74,6 +82,17 @@ export function parseV4VisibleSlashCommand(
 
   if (attachments.length > 0 || (options.contextAttachmentCount ?? 0) > 0) {
     return null;
+  }
+
+  // /model 与 /reasoning 是 App 层本地命令：不进入发送链，由宿主打开 composer
+  // 工具条的对应下拉。命令本身没有消息语义，带参数也只开菜单（参数忽略）。
+  if (commandName === "model" || commandName === "reasoning") {
+    return {
+      kind: "openConfigPicker",
+      command: commandName,
+      picker: commandName === "model" ? "model" : "thought",
+      displayText,
+    };
   }
 
   if (commandName === "compact" || commandName === "compress") {

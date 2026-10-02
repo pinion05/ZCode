@@ -161,6 +161,7 @@ import {
   resolveV4ComposerConfigPickerState,
   type V4ComposerConfigPicker,
 } from "@/v4/composer/configPickerState.js";
+import type { V4ComposerUiRequest } from "@/v4/composer/composerUiRequests.js";
 import { WebElementContextAttachmentChip } from "@/v4/composer/WebElementContextAttachmentChip.js";
 import { ConversationSelectionReferenceChip } from "@/v4/composer/ConversationSelectionReferenceChip.js";
 import type { AttachmentPutFn } from "@/v4/composer/attachmentUpload.js";
@@ -472,6 +473,12 @@ interface ConversationComposerProps {
   suppressGoalCommands?: boolean;
   /** App 层本地斜杠命令（如 `/side`），由 SessionPane 按门禁组装后透传。 */
   appSlashCommands?: readonly AppSlashCommand[];
+  /**
+   * App 层 UI 动作请求（`/model` `/reasoning` 等斜杠命令）。requestId 递增触发，
+   * 透传给工具条后与 Ctrl+M / 点击触发器走同一打开接口；新动作类型见
+   * composerUiRequests.ts，勿另开第二条请求 prop。
+   */
+  composerUiRequest?: V4ComposerUiRequest | null;
   /** 把 composer 的 drop 路由暴露给整个对话 pane / 桌面草稿标题栏。 */
   onDropTargetControllerChange?: (controller: ConversationDropTargetController | null) => void;
 }
@@ -535,6 +542,7 @@ function ConversationComposerImpl({
   onComposerRestoreApplied,
   suppressGoalCommands = false,
   appSlashCommands,
+  composerUiRequest,
   onDropTargetControllerChange,
 }: ConversationComposerProps) {
   const { intl, locale } = useZCodeIntl();
@@ -2054,6 +2062,7 @@ function ConversationComposerImpl({
             disabled={disabled}
             activeConfigPicker={activeConfigPicker}
             onConfigPickerOpenChange={handleConfigPickerOpenChange}
+            composerUiRequest={composerUiRequest}
             onSelectModel={handleSelectModelTrace}
             onSelectThought={onSelectThought}
             onSwitchMode={onSwitchMode}
@@ -2103,6 +2112,7 @@ function ConversationComposerImpl({
       activeConfigPicker,
       composerPhase,
       composerUsage,
+      composerUiRequest,
       disabled,
       draftConfig,
       draftMode,
